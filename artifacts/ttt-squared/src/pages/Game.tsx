@@ -10,7 +10,10 @@ import { getLLMMove } from "@/lib/llmService";
 import { loadSettings } from "@/lib/settings";
 import type { LLMSettings } from "@/lib/llmService";
 
+type GameMode = "vs-llm" | "vs-human";
+
 export default function Game() {
+  const [gameMode, setGameMode] = useState<GameMode>("vs-llm");
   const [state, setState] = useState(createInitialState());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isWaiting, setIsWaiting] = useState(false);
@@ -53,30 +56,40 @@ export default function Game() {
     setViewingIndex(null);
   }, []);
 
+  const handleModeChange = useCallback((mode: GameMode) => {
+    setGameMode(mode);
+    setState(createInitialState());
+    setIsWaiting(false);
+    setLlmError(null);
+    setMoveHistory([]);
+    setViewingIndex(null);
+  }, []);
+
   const handleHumanMove = useCallback(
     (boardIndex: number, cellIndex: number) => {
       if (isViewing) return;
-      if (isWaiting || state.winner || state.currentPlayer !== "X") return;
+      if (isWaiting || state.winner) return;
+      if (gameMode === "vs-llm" && state.currentPlayer !== "X") return;
       const nextState = applyMove(state, boardIndex, cellIndex);
       if (nextState === state) return;
       setState(nextState);
-      setMoveHistory((prev) => [...prev, { player: "X", boardIndex, cellIndex }]);
+      setMoveHistory((prev) => [...prev, { player: state.currentPlayer, boardIndex, cellIndex }]);
       setLlmError(null);
     },
-    [isViewing, isWaiting, state]
+    [isViewing, isWaiting, state, gameMode]
   );
 
   useEffect(() => {
     if (
+      gameMode === "vs-llm" &&
       state.currentPlayer === "O" &&
       !state.winner &&
       !isWaiting &&
       llmConfigured
     ) {
       setIsWaiting(true);
-      const currentState = state;
       const currentSettings = settings;
-      getLLMMove(currentState, currentSettings)
+      getLLMMove(stateRef.current, currentSettings)
         .then((move) => {
           if (!move) return;
           const prev = stateRef.current;
@@ -98,10 +111,12 @@ export default function Game() {
           setIsWaiting(false);
         });
     }
-  }, [state.currentPlayer, state.winner, llmConfigured, settings]);
+  }, [state.currentPlayer, state.winner, gameMode, llmConfigured, settings]);
 
   const isHumanTurn =
-    state.currentPlayer === "X" && !state.winner && !isViewing;
+    gameMode === "vs-human"
+      ? !state.winner && !isViewing
+      : state.currentPlayer === "X" && !state.winner && !isViewing;
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col overflow-hidden">
@@ -121,33 +136,58 @@ export default function Game() {
           >
             New Game
           </button>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="px-3 py-1.5 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors flex items-center gap-1.5"
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <path
-                fillRule="evenodd"
-                d="M8 10.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM6.5 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0Z"
-              />
-              <path
-                fillRule="evenodd"
-                d="M6.5 1.75a.75.75 0 0 1 1.5 0v.82a5.51 5.51 0 0 1 2.18.905l.58-.58a.75.75 0 1 1 1.06 1.06l-.58.58A5.51 5.51 0 0 1 12.14 6.5h.82a.75.75 0 0 1 0 1.5h-.82a5.51 5.51 0 0 1-.905 2.18l.58.58a.75.75 0 0 1-1.06 1.06l-.58-.58A5.51 5.51 0 0 1 7.86 12.43v.82a.75.75 0 0 1-1.5 0v-.82a5.51 5.51 0 0 1-2.18-.905l-.58.58a.75.75 0 1 1-1.06-1.06l.58-.58A5.51 5.51 0 0 1 2.43 8.5H1.75a.75.75 0 0 1 0-1.5h.68a5.51 5.51 0 0 1 .905-2.18l-.58-.58a.75.75 0 0 1 1.06-1.06l.58.58A5.51 5.51 0 0 1 6.5 2.57V1.75Z"
-              />
-            </svg>
-            Settings
-          </button>
+          {gameMode === "vs-llm" && (
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="px-3 py-1.5 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors flex items-center gap-1.5"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path
+                  fillRule="evenodd"
+                  d="M8 10.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM6.5 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0Z"
+                />
+                <path
+                  fillRule="evenodd"
+                  d="M6.5 1.75a.75.75 0 0 1 1.5 0v.82a5.51 5.51 0 0 1 2.18.905l.58-.58a.75.75 0 1 1 1.06 1.06l-.58.58A5.51 5.51 0 0 1 12.14 6.5h.82a.75.75 0 0 1 0 1.5h-.82a5.51 5.51 0 0 1-.905 2.18l.58.58a.75.75 0 0 1-1.06 1.06l-.58-.58A5.51 5.51 0 0 1 7.86 12.43v.82a.75.75 0 0 1-1.5 0v-.82a5.51 5.51 0 0 1-2.18-.905l-.58.58a.75.75 0 1 1-1.06-1.06l.58-.58A5.51 5.51 0 0 1 2.43 8.5H1.75a.75.75 0 0 1 0-1.5h.68a5.51 5.51 0 0 1 .905-2.18l-.58-.58a.75.75 0 0 1 1.06-1.06l.58.58A5.51 5.51 0 0 1 6.5 2.57V1.75Z"
+                />
+              </svg>
+              Settings
+            </button>
+          )}
         </div>
       </header>
 
       <main className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex gap-4 p-4 overflow-hidden items-start justify-center">
           <div className="flex flex-col items-center gap-4 overflow-y-auto flex-1 min-w-0 max-w-xl">
-            <div className="space-y-1 text-center w-full mt-2">
+            <div className="flex rounded-lg overflow-hidden border border-slate-700 shrink-0">
+              <button
+                onClick={() => handleModeChange("vs-llm")}
+                className={`px-4 py-2 text-sm font-semibold transition-colors ${
+                  gameMode === "vs-llm"
+                    ? "bg-amber-500 text-slate-900"
+                    : "bg-slate-800 text-slate-400 hover:text-white"
+                }`}
+              >
+                vs LLM
+              </button>
+              <button
+                onClick={() => handleModeChange("vs-human")}
+                className={`px-4 py-2 text-sm font-semibold transition-colors ${
+                  gameMode === "vs-human"
+                    ? "bg-amber-500 text-slate-900"
+                    : "bg-slate-800 text-slate-400 hover:text-white"
+                }`}
+              >
+                vs Human
+              </button>
+            </div>
+
+            <div className="space-y-1 text-center w-full">
               <StatusBar
                 state={isViewing ? displayedState : state}
                 isWaiting={isViewing ? false : isWaiting}
-                llmConfigured={llmConfigured}
+                llmConfigured={gameMode === "vs-llm" ? llmConfigured : true}
               />
 
               {isViewing && (
@@ -168,7 +208,9 @@ export default function Game() {
 
               {!isViewing && !displayedState.winner && displayedState.activeBoard === null && !isWaiting && (
                 <p className="text-xs text-slate-500">
-                  {displayedState.currentPlayer === "X"
+                  {gameMode === "vs-human"
+                    ? `${displayedState.currentPlayer} may play on any open board`
+                    : displayedState.currentPlayer === "X"
                     ? "You may play on any open board"
                     : "LLM may play on any open board"}
                 </p>
@@ -181,7 +223,7 @@ export default function Game() {
               </div>
             )}
 
-            {!llmConfigured && !settingsOpen && (
+            {gameMode === "vs-llm" && !llmConfigured && !settingsOpen && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -231,11 +273,11 @@ export default function Game() {
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="text-sky-400 font-bold">X</span>
-                You
+                {gameMode === "vs-human" ? "Player 1" : "You"}
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="text-rose-400 font-bold">O</span>
-                LLM
+                {gameMode === "vs-human" ? "Player 2" : "LLM"}
               </span>
             </div>
           </div>
@@ -260,10 +302,12 @@ export default function Game() {
         </div>
       </main>
 
-      <SettingsPanel
-        open={settingsOpen}
-        onClose={handleSettingsClose}
-      />
+      {gameMode === "vs-llm" && (
+        <SettingsPanel
+          open={settingsOpen}
+          onClose={handleSettingsClose}
+        />
+      )}
     </div>
   );
 }
