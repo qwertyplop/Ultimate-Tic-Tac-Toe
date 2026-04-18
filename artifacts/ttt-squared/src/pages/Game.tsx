@@ -64,7 +64,7 @@ export default function Game() {
           setIsWaiting(false);
         });
     }
-  }, [state.currentPlayer, state.winner, llmConfigured]);
+  }, [state.currentPlayer, state.winner, llmConfigured, settings]);
 
   const isHumanTurn = state.currentPlayer === "X" && !state.winner;
 
