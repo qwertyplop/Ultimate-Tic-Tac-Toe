@@ -49,14 +49,49 @@ function buildMessages(state: GameState): {
   systemMessage: string;
   userMessage: string;
 } {
-  const systemMessage = `You are an expert Ultimate Tic-Tac-Toe (Tic Tac Toe Squared) player. You play as O.
+  const systemMessage = `You are a highly competitive Ultimate Tic-Tac-Toe player. You play as O against a human who plays as X. Your sole goal is to WIN.
 
-Rules:
-- The game has a 3x3 grid of 9 small tic-tac-toe boards (boardIndex 0-8, row-major order).
-- Each small board has 9 cells (cellIndex 0-8, row-major order).
-- When you place O in cell position (row=cellIndex/3, col=cellIndex%3) within a small board, your opponent must next play in the big-grid board at that same (row, col) position.
-- If the required board is already finished (won or tied), the opponent may play on any unfinished board.
-- Win 3 small boards in a row, column, or diagonal to win overall.
+== HOW THE GAME WORKS ==
+There is a 3x3 grid of 9 small tic-tac-toe boards. Boards are numbered 0–8 in row-major order:
+  0 1 2
+  3 4 5
+  6 7 8
+Each small board has 9 cells numbered 0–8 in row-major order:
+  0 1 2
+  3 4 5
+  6 7 8
+
+When you place O in cell C of a small board, your opponent MUST play their next move in the small board whose index equals C. If that board is already finished (won or tied), the opponent may play on any unfinished board.
+
+You win the overall game by winning 3 small boards that form a line (row, column, or diagonal) on the big board.
+
+== HOW TO WIN — STRATEGIC PRIORITIES ==
+Evaluate every candidate move in this order and pick the highest-priority option available:
+
+1. WIN THE GAME NOW: If you can place O to win a small board, and winning that board gives you 3-in-a-row on the big board, do it immediately.
+
+2. BLOCK OPPONENT'S GAME WIN: If X already owns 2 small boards in a winning line and the third is still open, you MUST win or play in that third board to deny X a game win.
+
+3. WIN A STRATEGICALLY VITAL SMALL BOARD: Prioritize winning small boards at the center (board 4) and corners (boards 0, 2, 6, 8) of the big grid — they participate in the most winning lines. Win these before the opponent.
+
+4. BLOCK OPPONENT FROM WINNING A SMALL BOARD: If X has two pieces in a row inside a small board with the third cell empty, play in that cell to block.
+
+5. CONTROL WHICH BOARD YOU SEND THE OPPONENT TO: The cell index you play determines where X must go next. Send X somewhere BAD for them:
+   - Sending X to an already-finished board is neutral (they get free choice) — avoid unless necessary.
+   - Send X to a board where you are already ahead, or where X cannot make immediate progress.
+   - Avoid sending X to a board where they can win on their very next move.
+   - Prefer sending X to boards where X has NO pieces yet (no immediate threat).
+
+6. BUILD TWO-IN-A-ROW on the big board: Make moves that win small boards and build toward 3-in-a-row on the big grid.
+
+7. PLAY STRONG CELLS IN THE SMALL BOARD: Within any small board, the center (cell 4) is strongest; corners (0,2,6,8) are next; edges (1,3,5,7) are weakest.
+
+== THINKING PROCESS ==
+Before choosing your move, reason through:
+- Which small board wins would complete a line of 3 for me on the big board?
+- Is X one board away from winning the overall game? Which boards does X need?
+- Where does each candidate move send X next, and is that safe?
+- Can I win the required small board right now?
 
 Response format — you must respond with EXACTLY this one line and nothing else:
 MOVE board=<boardIndex> cell=<cellIndex>`;
@@ -73,13 +108,60 @@ MOVE board=<boardIndex> cell=<cellIndex>`;
 
   const boardDisplay = buildBoardDisplay(state);
 
-  const userMessage = `Current board state (each [] is a small board, . = empty, T = tied):
+  const wonByX = state.boardResults
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r === "X")
+    .map(({ i }) => i);
+  const wonByO = state.boardResults
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r === "O")
+    .map(({ i }) => i);
+  const tiedBoards = state.boardResults
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r === "tie")
+    .map(({ i }) => i);
+
+  const bigBoardLines = [
+    [0,1,2],[3,4,5],[6,7,8],
+    [0,3,6],[1,4,7],[2,5,8],
+    [0,4,8],[2,4,6],
+  ];
+  const xThreats = bigBoardLines
+    .filter(line => {
+      const xCount = line.filter(i => state.boardResults[i] === "X").length;
+      const openCount = line.filter(i => state.boardResults[i] === null).length;
+      return xCount === 2 && openCount === 1;
+    })
+    .map(line => `boards ${line.join("-")}`);
+  const oOpportunities = bigBoardLines
+    .filter(line => {
+      const oCount = line.filter(i => state.boardResults[i] === "O").length;
+      const openCount = line.filter(i => state.boardResults[i] === null).length;
+      return oCount === 2 && openCount === 1;
+    })
+    .map(line => `boards ${line.join("-")}`);
+
+  const bigBoardSummary = [
+    wonByX.length > 0 ? `X has won big-board positions: ${wonByX.join(", ")}` : null,
+    wonByO.length > 0 ? `O has won big-board positions: ${wonByO.join(", ")}` : null,
+    tiedBoards.length > 0 ? `Tied (finished, neutral) big-board positions: ${tiedBoards.join(", ")}` : null,
+    xThreats.length > 0 ? `⚠ X THREATS (2-in-a-row on big board, must block): ${xThreats.join("; ")}` : null,
+    oOpportunities.length > 0 ? `★ O OPPORTUNITIES (2-in-a-row on big board, go for win!): ${oOpportunities.join("; ")}` : null,
+  ].filter(Boolean).join("\n");
+
+  const userMessage = `== CURRENT BOARD STATE ==
+Each [] is a small board. Inside: . = empty, X = X's move, O = your move, T = tied board.
+
 ${boardDisplay}
 
+== BIG BOARD SUMMARY ==
+${bigBoardSummary || "Game just started — no boards won yet."}
+
+== YOUR TURN ==
 ${activeBoardStr}
 Valid moves: ${movesStr}
 
-Choose a strategic move. Respond with your MOVE line only.`;
+Pick your best move. Respond with your MOVE line only.`;
 
   return { systemMessage, userMessage };
 }
@@ -122,7 +204,7 @@ export async function getLLMMove(
           { role: "system", content: systemMessage },
           { role: "user", content: userMessage },
         ],
-        max_tokens: 50,
+        max_tokens: 300,
         temperature: 0.2,
       }),
     });
