@@ -7,11 +7,10 @@ export interface LLMSettings {
   model: string;
 }
 
-function buildPrompt(state: GameState): string {
-  const boardChar = (val: string | null) =>
-    val === null ? "." : val;
+function buildBoardDisplay(state: GameState): string {
+  const boardChar = (val: string | null) => (val === null ? "." : val);
+  const bigRows: string[] = [];
 
-  const bigRows = [];
   for (let bigRow = 0; bigRow < 3; bigRow++) {
     const rowLines: string[] = ["", "", ""];
     for (let bigCol = 0; bigCol < 3; bigCol++) {
@@ -43,37 +42,46 @@ function buildPrompt(state: GameState): string {
     if (bigRow < 2) bigRows.push("");
   }
 
-  const boardDisplay = bigRows.join("\n");
+  return bigRows.join("\n");
+}
 
-  const activeBoardStr =
-    state.activeBoard !== null
-      ? `You MUST play in board ${state.activeBoard} (big-grid position row=${Math.floor(state.activeBoard / 3)}, col=${state.activeBoard % 3}).`
-      : "You may play in ANY unfinished board.";
+function buildMessages(state: GameState): {
+  systemMessage: string;
+  userMessage: string;
+} {
+  const systemMessage = `You are an expert Ultimate Tic-Tac-Toe (Tic Tac Toe Squared) player. You play as O.
+
+Rules:
+- The game has a 3x3 grid of 9 small tic-tac-toe boards (boardIndex 0-8, row-major order).
+- Each small board has 9 cells (cellIndex 0-8, row-major order).
+- When you place O in cell position (row=cellIndex/3, col=cellIndex%3) within a small board, your opponent must next play in the big-grid board at that same (row, col) position.
+- If the required board is already finished (won or tied), the opponent may play on any unfinished board.
+- Win 3 small boards in a row, column, or diagonal to win overall.
+
+Response format — you must respond with EXACTLY this one line and nothing else:
+MOVE board=<boardIndex> cell=<cellIndex>`;
 
   const validMoves = getValidMoves(state);
   const movesStr = validMoves
     .map((m) => `board=${m.boardIndex} cell=${m.cellIndex}`)
     .join(", ");
 
-  return `You are playing Ultimate Tic-Tac-Toe (Tic Tac Toe Squared) as player O.
+  const activeBoardStr =
+    state.activeBoard !== null
+      ? `You MUST play in board ${state.activeBoard} (big-grid row=${Math.floor(state.activeBoard / 3)}, col=${state.activeBoard % 3}).`
+      : "You may play in ANY unfinished board.";
 
-Rules reminder:
-- There are 9 small boards in a 3x3 grid.
-- When you place O in cell position (row, col) within a small board, your opponent must next play in the big-grid board at (row, col).
-- Win 3 small boards in a row/column/diagonal to win overall.
+  const boardDisplay = buildBoardDisplay(state);
 
-Current board state (each [] is a small board, . = empty):
+  const userMessage = `Current board state (each [] is a small board, . = empty, T = tied):
 ${boardDisplay}
 
 ${activeBoardStr}
-
 Valid moves: ${movesStr}
 
-You must respond with EXACTLY one line in this format:
-MOVE board=<boardIndex> cell=<cellIndex>
+Choose a strategic move. Respond with your MOVE line only.`;
 
-Where boardIndex is 0-8 (big grid position, row-major) and cellIndex is 0-8 (small board position, row-major).
-Choose a strategic move. Respond with nothing else.`;
+  return { systemMessage, userMessage };
 }
 
 export async function fetchModels(settings: LLMSettings): Promise<string[]> {
@@ -101,6 +109,7 @@ export async function getLLMMove(
   const base = settings.baseUrl.replace(/\/$/, "");
 
   try {
+    const { systemMessage, userMessage } = buildMessages(state);
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
@@ -110,10 +119,8 @@ export async function getLLMMove(
       body: JSON.stringify({
         model: settings.model,
         messages: [
-          {
-            role: "user",
-            content: buildPrompt(state),
-          },
+          { role: "system", content: systemMessage },
+          { role: "user", content: userMessage },
         ],
         max_tokens: 50,
         temperature: 0.2,
@@ -126,8 +133,7 @@ export async function getLLMMove(
     }
 
     const data = await res.json();
-    const text: string =
-      data.choices?.[0]?.message?.content?.trim() ?? "";
+    const text: string = data.choices?.[0]?.message?.content?.trim() ?? "";
 
     const match = text.match(/MOVE\s+board=(\d+)\s+cell=(\d+)/i);
     if (match) {

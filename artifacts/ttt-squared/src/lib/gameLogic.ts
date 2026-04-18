@@ -64,7 +64,9 @@ export function applyMove(
   const bigBoardCells: Cell[] = newBoardResults.map((r) =>
     r === "X" ? "X" : r === "O" ? "O" : null
   );
-  const newOverallWinner = checkWinner(bigBoardCells);
+  const newOverallWinner = newBoardResults.every((r) => r !== null)
+    ? checkWinner(bigBoardCells) ?? "tie"
+    : checkWinner(bigBoardCells);
 
   let newActiveBoard: number | null = cellIndex;
   if (newBoardResults[cellIndex] !== null) {
