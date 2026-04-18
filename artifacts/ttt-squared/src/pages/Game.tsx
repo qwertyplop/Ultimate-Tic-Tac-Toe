@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import { BigBoard } from "@/components/BigBoard";
 import { StatusBar } from "@/components/StatusBar";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { MoveHistory } from "@/components/MoveHistory";
+import type { MoveRecord } from "@/components/MoveHistory";
 import { createInitialState, applyMove } from "@/lib/gameLogic";
 import { getLLMMove } from "@/lib/llmService";
 import { loadSettings } from "@/lib/settings";
@@ -15,6 +17,27 @@ export default function Game() {
   const [llmError, setLlmError] = useState<string | null>(null);
   const [settings, setSettings] = useState<LLMSettings>(loadSettings);
 
+  const [moveHistory, setMoveHistory] = useState<MoveRecord[]>([]);
+  const [viewingIndex, setViewingIndex] = useState<number | null>(null);
+
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  const replayStates = useMemo(() => {
+    const states = [];
+    let s = createInitialState();
+    for (const move of moveHistory) {
+      s = applyMove(s, move.boardIndex, move.cellIndex);
+      states.push(s);
+    }
+    return states;
+  }, [moveHistory]);
+
+  const displayedState = viewingIndex !== null ? replayStates[viewingIndex] : state;
+  const isViewing = viewingIndex !== null;
+
   const llmConfigured = !!(settings.baseUrl && settings.apiKey && settings.model);
 
   const handleSettingsClose = useCallback(() => {
@@ -26,15 +49,21 @@ export default function Game() {
     setState(createInitialState());
     setIsWaiting(false);
     setLlmError(null);
+    setMoveHistory([]);
+    setViewingIndex(null);
   }, []);
 
   const handleHumanMove = useCallback(
     (boardIndex: number, cellIndex: number) => {
+      if (isViewing) return;
       if (isWaiting || state.winner || state.currentPlayer !== "X") return;
-      setState((prev) => applyMove(prev, boardIndex, cellIndex));
+      const nextState = applyMove(state, boardIndex, cellIndex);
+      if (nextState === state) return;
+      setState(nextState);
+      setMoveHistory((prev) => [...prev, { player: "X", boardIndex, cellIndex }]);
       setLlmError(null);
     },
-    [isWaiting, state.winner, state.currentPlayer]
+    [isViewing, isWaiting, state]
   );
 
   useEffect(() => {
@@ -50,10 +79,15 @@ export default function Game() {
       getLLMMove(currentState, currentSettings)
         .then((move) => {
           if (!move) return;
-          setState((prev) => {
-            if (prev.currentPlayer !== "O" || prev.winner) return prev;
-            return applyMove(prev, move.boardIndex, move.cellIndex);
-          });
+          const prev = stateRef.current;
+          if (prev.currentPlayer !== "O" || prev.winner) return;
+          const nextState = applyMove(prev, move.boardIndex, move.cellIndex);
+          if (nextState === prev) return;
+          setState(nextState);
+          setMoveHistory((h) => [
+            ...h,
+            { player: "O", boardIndex: move.boardIndex, cellIndex: move.cellIndex },
+          ]);
         })
         .catch((e) => {
           setLlmError(
@@ -66,7 +100,8 @@ export default function Game() {
     }
   }, [state.currentPlayer, state.winner, llmConfigured, settings]);
 
-  const isHumanTurn = state.currentPlayer === "X" && !state.winner;
+  const isHumanTurn =
+    state.currentPlayer === "X" && !state.winner && !isViewing;
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col overflow-hidden">
@@ -105,94 +140,123 @@ export default function Game() {
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col items-center justify-start gap-4 p-4 overflow-y-auto">
-        <div className="space-y-1 text-center mt-2">
-          <StatusBar
-            state={state}
-            isWaiting={isWaiting}
-            llmConfigured={llmConfigured}
-          />
+      <main className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex gap-4 p-4 overflow-hidden items-start justify-center">
+          <div className="flex flex-col items-center gap-4 overflow-y-auto flex-1 min-w-0 max-w-xl">
+            <div className="space-y-1 text-center w-full mt-2">
+              <StatusBar
+                state={isViewing ? displayedState : state}
+                isWaiting={isViewing ? false : isWaiting}
+                llmConfigured={llmConfigured}
+              />
 
-          {state.activeBoard !== null && !state.winner && (
-            <p className="text-xs text-slate-500">
-              Next board:{" "}
-              <span className="text-slate-400 font-medium">
-                row {Math.floor(state.activeBoard / 3) + 1}, col {(state.activeBoard % 3) + 1}
+              {isViewing && (
+                <p className="text-xs text-amber-500 font-medium">
+                  Viewing move {viewingIndex + 1} of {moveHistory.length} — click "Back to live" in the log to resume
+                </p>
+              )}
+
+              {!isViewing && displayedState.activeBoard !== null && !displayedState.winner && (
+                <p className="text-xs text-slate-500">
+                  Next board:{" "}
+                  <span className="text-slate-400 font-medium">
+                    row {Math.floor(displayedState.activeBoard / 3) + 1}, col{" "}
+                    {(displayedState.activeBoard % 3) + 1}
+                  </span>
+                </p>
+              )}
+
+              {!isViewing && !displayedState.winner && displayedState.activeBoard === null && !isWaiting && (
+                <p className="text-xs text-slate-500">
+                  {displayedState.currentPlayer === "X"
+                    ? "You may play on any open board"
+                    : "LLM may play on any open board"}
+                </p>
+              )}
+            </div>
+
+            {llmError && (
+              <div className="bg-rose-900/40 border border-rose-700 rounded-lg px-3 py-2 text-xs text-rose-300 max-w-md text-center">
+                {llmError}
+              </div>
+            )}
+
+            {!llmConfigured && !settingsOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-amber-900/30 border border-amber-700/50 rounded-xl px-5 py-4 text-center max-w-sm"
+              >
+                <p className="text-amber-300 font-semibold text-sm mb-2">
+                  Configure LLM to play
+                </p>
+                <p className="text-slate-400 text-xs mb-3">
+                  Enter your API base URL, key, and model to let an AI opponent play O.
+                </p>
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors"
+                >
+                  Open Settings
+                </button>
+              </motion.div>
+            )}
+
+            <BigBoard
+              state={displayedState}
+              onMove={handleHumanMove}
+              isHumanTurn={isHumanTurn}
+              isWaiting={isViewing ? false : isWaiting}
+            />
+
+            {state.winner && !isViewing && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.85 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ type: "spring", stiffness: 300, damping: 22 }}
+              >
+                <button
+                  onClick={handleNewGame}
+                  className="px-6 py-2.5 font-bold rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors shadow-lg shadow-amber-500/20 text-sm"
+                >
+                  Play again
+                </button>
+              </motion.div>
+            )}
+
+            <div className="flex items-center gap-6 text-xs text-slate-600 pb-4">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm ring-1 ring-amber-400" />
+                Active board
               </span>
-            </p>
-          )}
+              <span className="flex items-center gap-1.5">
+                <span className="text-sky-400 font-bold">X</span>
+                You
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="text-rose-400 font-bold">O</span>
+                LLM
+              </span>
+            </div>
+          </div>
 
-          {!state.winner && state.activeBoard === null && !isWaiting && (
-            <p className="text-xs text-slate-500">
-              {state.currentPlayer === "X"
-                ? "You may play on any open board"
-                : "LLM may play on any open board"}
-            </p>
-          )}
+          <div className="hidden sm:flex flex-col" style={{ height: "calc(100vh - 64px)", paddingTop: "8px" }}>
+            <MoveHistory
+              history={moveHistory}
+              viewingIndex={viewingIndex}
+              onViewMove={setViewingIndex}
+              isLive={!state.winner}
+            />
+          </div>
         </div>
 
-        {llmError && (
-          <div className="bg-rose-900/40 border border-rose-700 rounded-lg px-3 py-2 text-xs text-rose-300 max-w-md text-center">
-            {llmError}
-          </div>
-        )}
-
-        {!llmConfigured && !settingsOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-amber-900/30 border border-amber-700/50 rounded-xl px-5 py-4 text-center max-w-sm"
-          >
-            <p className="text-amber-300 font-semibold text-sm mb-2">
-              Configure LLM to play
-            </p>
-            <p className="text-slate-400 text-xs mb-3">
-              Enter your API base URL, key, and model to let an AI opponent play O.
-            </p>
-            <button
-              onClick={() => setSettingsOpen(true)}
-              className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors"
-            >
-              Open Settings
-            </button>
-          </motion.div>
-        )}
-
-        <BigBoard
-          state={state}
-          onMove={handleHumanMove}
-          isHumanTurn={isHumanTurn}
-          isWaiting={isWaiting}
-        />
-
-        {state.winner && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.85 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ type: "spring", stiffness: 300, damping: 22 }}
-          >
-            <button
-              onClick={handleNewGame}
-              className="px-6 py-2.5 font-bold rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-900 transition-colors shadow-lg shadow-amber-500/20 text-sm"
-            >
-              Play again
-            </button>
-          </motion.div>
-        )}
-
-        <div className="flex items-center gap-6 text-xs text-slate-600 pb-4">
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm ring-1 ring-amber-400" />
-            Active board
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="text-sky-400 font-bold">X</span>
-            You
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="text-rose-400 font-bold">O</span>
-            LLM
-          </span>
+        <div className="sm:hidden px-4 pb-4">
+          <MoveHistory
+            history={moveHistory}
+            viewingIndex={viewingIndex}
+            onViewMove={setViewingIndex}
+            isLive={!state.winner}
+          />
         </div>
       </main>
 
